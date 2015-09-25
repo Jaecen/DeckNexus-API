@@ -3,8 +3,9 @@ var router = require('koa-router')();
 
 var decksController = require('./controllers/decks');
 
+// Init routing
 
-router.get('/decks',  decksController.list);
+router.get('/decks',  decksController.get);
 
 app
 	.use(router.routes())
