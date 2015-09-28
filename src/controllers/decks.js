@@ -1,4 +1,10 @@
-let users = {
+const crypto = require('crypto');
+const getRawBody = require('raw-body');
+
+const deckParser = require('../deckParser');
+const DeckTree = require('../deckTree');
+
+const users = {
 	1: {
 		id: 1,
 		name: 'jaecen',
@@ -6,22 +12,53 @@ let users = {
 	}
 };
 
-let deck = {};			// Equivalent to a head
-let commits = {};		// Equivalent to a commit object
-let decklists = {};		// Equivalent to a blob object
-let tags = {};			// Equivalent to a tag
-let comments = {};		// No equivalent
-
-// A deck points to a commit and is moved forward with each commit
-// A commit points to a decklist and contains some metadata (author, notes, parent commit, etc)
-// A decklist is a normalized list of cards and quantities
-// A tag points to a commit and does not move forward
-// A comment points to a commit and contains a timestamp, author, and content 
+const objects = {};		// Strictly equivalent to Git objects. Contains tree and blob objects.
+const decks = {};		// Equivalent to a head
+const tags = {};		// Equivalent to a tag
+const comments = {};	// No equivalent
 
 module.exports.get = function *(next) {
+	const deck = DeckTree.walk(
+		objects, 
+		this.params.hash);
+	
 	this.body = {
-		//deck
+		response: 'hi',
+		deck: deck,
 	};
 	
+	yield next;
+}
+
+module.exports.post = function*(next) {
+
+	const requestContent = yield getRawBody(this.req, {
+    	length: this.request.length,
+    	limit: '8kb',
+    	encoding: this.request.charset
+  	});
+	
+	let parsedDeck = {};
+	try {
+		parsedDeck = deckParser.parse(requestContent);
+	} catch(exception) {
+		this.throw(
+			400, 
+			`Invalid deck format. ${exception.message}`);
+	}
+	
+	const deckTreeObjects = DeckTree.build(parsedDeck);
+	let firstVal = null;
+	
+	for(let object of deckTreeObjects) {
+		if(firstVal === null)
+			firstVal = object;
+			
+		if(!objects.hasOwnProperty(object.hash)) {
+			objects[object.hash] = object;
+		}
+	}
+
+	this.response.body = firstVal.hash;
 	yield next;
 }

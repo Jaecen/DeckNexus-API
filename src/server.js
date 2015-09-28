@@ -5,7 +5,8 @@ var decksController = require('./controllers/decks');
 
 // Init routing
 
-router.get('/decks',  decksController.get);
+router.get('/decks/:hash',  decksController.get);
+router.post('/decks',  decksController.post);
 
 app
 	.use(router.routes())
