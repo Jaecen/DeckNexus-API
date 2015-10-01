@@ -26,11 +26,13 @@ function* createDeckTree(deck) {
 		.boards
 		.map(board => ({
 			normalizedType: normalizeName(board.type),
+			cards: board.cards,
 		}))
 		.sort((left, right) => left.normalizedType.localeCompare(right.normalizedType))
 		.map(board => ({
 			treeObjects: Array.from(createBoardTreeObject(board)),
 			normalizedType: board.normalizedType,
+			cards: board.cards,
 		}));
 
 	const shasum = crypto.createHash('sha256');

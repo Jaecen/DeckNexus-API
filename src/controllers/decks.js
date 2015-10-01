@@ -38,14 +38,21 @@ module.exports.post = function*(next) {
 
 	const deckTreeObjects = DeckTree.build(parsedDeck);
 
+	let firstHash = null;
 	yield rethink
 		.connect(rethinkConnectionParams)
 		.then((connection) => {
 			const objectRepository = ObjectRepository(connection);
-			this.response.body = 'unknown';
-		
-			return Promise.all(map(deckTreeObjects, object => objectRepository.add(object)));
+			return Promise
+				.all(map(deckTreeObjects, object => {
+					if(firstHash === null) {
+						firstHash = object.hash;
+					}
+					
+					return objectRepository.add(object)
+				}));
 		})
+		.then(results => this.body = firstHash)
 		.then(() => next);
 }
 
