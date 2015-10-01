@@ -5,10 +5,10 @@ const BoardType = 'board';
 const CardType = 'card'; 
 const DeckType = 'deck'; 
 	
-function TreeEntry(type, hash, data) {
+function TreeEntry(type, hash, name) {
 	this.type = type;
 	this.hash = hash;
-	this.data = data;
+	this.name = name;
 };
 
 function TreeObject(hash, entries) {
@@ -24,10 +24,13 @@ function BlobObject(hash, content) {
 function* createDeckTree(deck) {
 	const boardTreeObjects = deck
 		.boards
-		.sort((left, right) => normalizeName(left.type).localeCompare(normalizeName(right.type)))
+		.map(board => ({
+			normalizedType: normalizeName(board.type),
+		}))
+		.sort((left, right) => left.normalizedType.localeCompare(right.normalizedType))
 		.map(board => ({
 			treeObjects: Array.from(createBoardTreeObject(board)),
-			type: board.type,
+			normalizedType: board.normalizedType,
 		}));
 
 	const shasum = crypto.createHash('sha256');
@@ -39,7 +42,7 @@ function* createDeckTree(deck) {
 		boardTreeObjects.map(board => new TreeEntry(
 			BoardType,
 			board.treeObjects[0].hash,
-			board.type)));
+			board.normalizedType)));
 
 	for(let board of boardTreeObjects) {
 		for(let descendant of board.treeObjects) {
@@ -91,61 +94,55 @@ function normalizeName(name) {
 		.toLowerCase();
 }
 
-function walkDeckTree(objects, deckObjectHash) {
-	const noop = () => ({});
-	
-	const deck = {
-		boards: []
-	};
-	let currentBoard = null;
-	
-	const found = (type, hash, object, data) => {
-		switch(type) {
-			case BoardType:
-				currentBoard = {
-					type: data,
-					cards: [],
-				};
-				deck.boards.push(currentBoard);
-				break;
-				
-			case CardType:
-				currentBoard.cards.push({
-					name: object.content.normalizedName,
-					quantity: data
-				});
-				break;
-		}};
-
-	walkObject(objects, deckObjectHash, DeckType, {
-		notFound: noop,
-		found: found,
-		foundTree: found });
-		
-	return deck;
+function walkObject(objectBuilder, objectRepository, type, hash, name) {
+	return Promise.resolve(
+		objectBuilder.has(type)
+		? objectBuilder.get(type)(
+			type, 
+			hash, 
+			name,
+			() => objectRepository.get(hash),
+			() => walkEntries(objectBuilder, objectRepository, type, hash, name))
+		: null);
 }
 
-function walkObject(objects, hash, type, callbacks, treeEntryData) {
-	console.log(hash, type, treeEntryData);
-	
-	if(!objects.hasOwnProperty(hash)) {
-		callbacks.notFound(type, hash);
-		return;
-	}
-	
-	const object = objects[hash];
-
-	if(object.hasOwnProperty('entries')) {
-		callbacks.foundTree(type, hash, object, treeEntryData);
-		for(let entry of object.entries) {
-			walkObject(objects, entry.hash, entry.type, callbacks, entry.data);
-		}
-	} else {
-		callbacks.found(type, hash, object, treeEntryData);
-		return;
-	} 
+function walkEntries(objectBuilder, objectRepository, type, hash, name) {
+	return objectRepository
+		.get(hash)
+		.then(object => object && object.hasOwnProperty('entries')
+			? Promise.all(object.entries.map(entry => walkObject(objectBuilder, objectRepository, entry.type, entry.hash, entry.name))) 
+			: Promise.resolve(null)
+		);
 }
+
+const objectBuilder = new Map([
+	[
+		DeckType, 
+		(type, hash, name, getObject, getEntities) => 
+			getEntities()
+			.then(entities => ({
+				boards: entities,
+			}))
+	],
+	[
+		BoardType,
+		(type, hash, name, getObject, getEntities) => 
+			getEntities()
+			.then(entities => ({
+				type: name,
+				cards: entities,
+			}))
+	],
+	[
+		CardType, 
+		(type, hash, name, getObject, getEntities) => 
+			getObject()
+			.then(object => ({
+				name: object.content.normalizedName,
+				quantity: name,
+			}))
+	],
+]);
 
 module.exports.build = createDeckTree;
-module.exports.walk = walkDeckTree;
-module.exports.walkObject = walkObject;
+module.exports.walk = (objectRepository, hash) => walkObject(objectBuilder, objectRepository, DeckType, hash, null);
