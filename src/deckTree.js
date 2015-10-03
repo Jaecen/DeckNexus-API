@@ -1,93 +1,83 @@
 const crypto = require('crypto');
+const iterUtil = require('./iterUtil');
 
-const BlobType = 'blob'; 
 const BoardType = 'board'; 
 const CardType = 'card'; 
 const DeckType = 'deck'; 
-	
-function TreeEntry(type, hash, name) {
-	this.type = type;
-	this.hash = hash;
-	this.name = name;
-};
 
-function TreeObject(hash, entries) {
-	this.hash = hash;
-	this.entries = entries;
-}
-
-function BlobObject(hash, content) {
-	this.hash = hash;
-	this.content = content;
-}
-
-function* createDeckTree(deck) {
-	const boardTreeObjects = deck
-		.boards
-		.map(board => ({
-			normalizedType: normalizeName(board.type),
-			cards: board.cards,
-		}))
-		.sort((left, right) => left.normalizedType.localeCompare(right.normalizedType))
-		.map(board => ({
-			treeObjects: Array.from(createBoardTreeObject(board)),
-			normalizedType: board.normalizedType,
-			cards: board.cards,
-		}));
-
-	const shasum = crypto.createHash('sha256');
-	boardTreeObjects.forEach(board => shasum.update(board.treeObjects[0].hash));
-	const deckHash = shasum.digest('hex');
-	
-	yield new TreeObject(
-		deckHash,
-		boardTreeObjects.map(board => new TreeEntry(
-			BoardType,
-			board.treeObjects[0].hash,
-			board.normalizedType)));
-
-	for(let board of boardTreeObjects) {
-		for(let descendant of board.treeObjects) {
-			yield descendant;
-		}
+function buildObject(type, entity, buildHandlers) {
+	if(!buildHandlers.has(type)) {
+		return null;
 	}
+
+	const { childrenSelector, objectBuilder } = buildHandlers.get(type);
+	const children = childrenSelector(entity)
+		.sort(({ sortKey: left }, { sortKey: right }) => 
+			left.localeCompare(right))
+		.map(({ type: childType, sortKey: childSortKey, entity: childEntity }) => 
+			buildObject(childType, childEntity, buildHandlers));
+	
+	return {
+		entity: entity,
+		object: objectBuilder(entity, children),
+		children: children,
+	};
 }
 
-function* createBoardTreeObject(board) {
-	const hashedCards = board
-		.cards
-		.map(card => ({
-			normalizedName: normalizeName(card.name),
-			quantity: card.quantity,
-		}))
-		.sort((left, right) => left.normalizedName.localeCompare(right.normalizedName))
-		.map(card => ({
-			normalizedName: card.normalizedName,
-			hash: crypto
-				.createHash('sha256')
-				.update(card.normalizedName)
-				.digest('hex'),
-			quantity: card.quantity,
-		}));
-		
-	const shasum = crypto.createHash('sha256');
-	hashedCards.forEach(card => shasum.update(card.hash).update(String(card.quantity)));
-	const boardHash = shasum.digest('hex');
-	
-	yield new TreeObject(
-		boardHash,
-		hashedCards.map(card => new TreeEntry(
-			CardType,
-			card.hash,
-			card.quantity)));
+const buildHandlers = new Map([
+	[
+		DeckType,
+		{
+			'childrenSelector': entity => entity.boards
+				.map(board => ({
+					'type': BoardType,
+					'sortKey': normalizeName(board.type), 
+					'entity': board,
+				})),
 			
-	for(let card of hashedCards) {
-	 	yield new BlobObject(
-			card.hash, 
-			{
-			 	normalizedName: card.normalizedName
-		 	});
+			'objectBuilder': (entity, children) => ({
+				'hash': buildHash(children.map(child => child.object.hash)),
+				'boards': children.map(child => ({ type: normalizeName(child.entity.type), hash: child.object.hash })),
+			}),
+		}
+	],
+	[
+		BoardType,
+		{
+			'childrenSelector': entity => entity.cards
+				.map(card => ({
+					'type': CardType, 
+					'sortKey': normalizeName(card.name), 
+					'entity': card
+				})),
+			
+			'objectBuilder': (entity, children) => ({
+				'hash': buildHash(children.map(child => `${ child.entity.quantity } ${ child.object.hash }`)),
+				'cards': children.map(child => ({ quantity: child.entity.quantity, hash: child.object.hash })),
+			}),
+		} 
+	],
+	[
+		CardType,
+		{
+			'childrenSelector': entity => [],
+			
+			'objectBuilder': (entity, children) => ({
+				'hash': buildHash(normalizeName(entity.name)),
+				'normalizedName': normalizeName(entity.name),
+			}),
+		}
+	]
+]);
+
+function buildHash(values) {
+	const sum = crypto.createHash('sha256')
+	
+	for(let value of values) {
+		sum.update(value);
 	}
+	
+	return sum.digest('hex');
 }
 
 function normalizeName(name) {
@@ -96,55 +86,62 @@ function normalizeName(name) {
 		.toLowerCase();
 }
 
-function walkObject(objectBuilder, objectRepository, type, hash, name) {
-	return Promise.resolve(
-		objectBuilder.has(type)
-		? objectBuilder.get(type)(
-			type, 
-			hash, 
-			name,
-			() => objectRepository.get(hash),
-			() => walkEntries(objectBuilder, objectRepository, type, hash, name))
-		: null);
+function* iterateTreeObjects(node) {
+	for(let child of node.children) {
+		yield* iterateTreeObjects(child)
+	}
+	
+	yield node.object;
 }
 
-function walkEntries(objectBuilder, objectRepository, type, hash, name) {
-	return objectRepository
-		.get(hash)
-		.then(object => object && object.hasOwnProperty('entries')
-			? Promise.all(object.entries.map(entry => walkObject(objectBuilder, objectRepository, entry.type, entry.hash, entry.name))) 
-			: Promise.resolve(null)
-		);
+//=================================================================
+
+function walkObject(objectBuilder, objectRepository, type, hash, reference) {
+	return objectBuilder.has(type)
+		? objectRepository
+			.get(hash)
+			.then(object => objectBuilder.get(type)(
+				object,
+				reference,
+				(type, hashes) => Promise.all(
+					hashes.map(({ hash, reference }) => 
+						walkObject(objectBuilder, objectRepository, type, hash, reference)))
+			))
+		: Promise.resolve(null);
 }
 
 const objectBuilder = new Map([
 	[
 		DeckType, 
-		(type, hash, name, getObject, getEntities) => 
-			getEntities()
-			.then(entities => ({
-				boards: entities,
+		(object, reference, getEntities) => 
+			getEntities(BoardType, object.boards.map(board => ({ hash: board.hash, reference: board })))
+			.then(boards => ({
+				boards: boards,
 			}))
 	],
 	[
 		BoardType,
-		(type, hash, name, getObject, getEntities) => 
-			getEntities()
-			.then(entities => ({
-				type: name,
-				cards: entities,
+		(object, reference, getEntities) => 
+			getEntities(CardType, object.cards.map(card => ({ hash: card.hash, reference: card })))
+			.then(cards => ({
+				type: reference.type,
+				cards: cards,
 			}))
 	],
 	[
-		CardType, 
-		(type, hash, name, getObject, getEntities) => 
-			getObject()
-			.then(object => ({
-				name: object.content.normalizedName,
-				quantity: name,
-			}))
+		CardType,
+		(object, reference, getEntities) => 
+ 			({
+				 quantity: reference.quantity, 
+				 name: object.normalizedName
+			}) 
 	],
 ]);
 
-module.exports.build = createDeckTree;
-module.exports.walk = (objectRepository, hash) => walkObject(objectBuilder, objectRepository, DeckType, hash, null);
+module.exports.deserialize = (objectRepository, hash) => 
+	walkObject(objectBuilder, objectRepository, DeckType, hash, null);
+	
+module.exports.serialize = function*(deck) {
+	const deckNode = buildObject(DeckType, deck, buildHandlers);
+	yield* iterateTreeObjects(deckNode);
+}

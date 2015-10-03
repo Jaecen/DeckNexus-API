@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const getRawBody = require('raw-body');
 const rethink = require('rethinkdb');
 
+const iterUtil = require('../iterUtil');
 const deckParser = require('../deckParser');
 const DeckTree = require('../deckTree');
 const ObjectRepository = require('../objectRepository');
@@ -15,7 +16,7 @@ const rethinkConnectionParams = {
 module.exports.get = function *(next) {
 	yield rethink
 		.connect(rethinkConnectionParams)
-		.then(connection => DeckTree.walk(
+		.then(connection => DeckTree.deserialize(
 			ObjectRepository(connection),
 			this.params.hash))
 		.then(deck => { this.body = deck })
@@ -36,27 +37,21 @@ module.exports.post = function*(next) {
 		this.throw(400, `Invalid deck format. ${exception.message}`);
 	}
 
-	const deckTreeObjects = DeckTree.build(parsedDeck);
+	const deckObjects = DeckTree.serialize(parsedDeck);
 
-	let firstHash = null;
+	let deckHash = null;
 	yield rethink
 		.connect(rethinkConnectionParams)
 		.then((connection) => {
 			const objectRepository = ObjectRepository(connection);
 			return Promise
-				.all(map(deckTreeObjects, object => {
-					if(firstHash === null) {
-						firstHash = object.hash;
-					}
-					
-					return objectRepository.add(object)
-				}));
+				.all(iterUtil.map(
+					deckObjects, 
+					object => {
+						deckHash = object.hash;
+						return objectRepository.add(object)
+					}));
 		})
-		.then(results => this.body = firstHash)
+		.then(results => this.body = deckHash)
 		.then(() => next);
-}
-
-function* map(iterable, fn) {
-	for(let x of iterable)
-		yield fn(x);
 }
