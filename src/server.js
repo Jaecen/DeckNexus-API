@@ -1,14 +1,16 @@
-var app = require('koa')();
-var router = require('koa-router')();
+const app = require('koa')();
+const router = require('koa-router')();
+const bodyParser = require('koa-bodyparser');
 
-var decksController = require('./controllers/decks');
+const decksController = require('./controllers/decks');
 
 // Init routing
-
-router.get('/decks/:hash',  decksController.get);
-router.post('/decks',  decksController.post);
+router.get('/decks/@:hash',  decksController.getByHash);
+router.get('/decks/:user/:name',  decksController.getByName);
+router.post('/decks/:user/:name',  decksController.post);
 
 app
+	.use(bodyParser())
 	.use(router.routes())
 	.use(router.allowedMethods());
 	

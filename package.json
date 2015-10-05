@@ -10,8 +10,8 @@
   "license": "ISC",
   "dependencies": {
     "koa": "^1.0.0",
+    "koa-bodyparser": "^2.0.1",
     "koa-router": "^5.1.2",
-    "raw-body": "^2.1.4",
     "rethinkdb": "^2.1.1"
   }
 }
