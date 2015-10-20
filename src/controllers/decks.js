@@ -7,6 +7,27 @@ const decklistParser = require('../decklistParser');
 const TreeSerializer = require('../treeSerializer');
 const ObjectRepository = require('../objectRepository');
 
+module.exports.getAll = function* (next) {
+	yield rethink
+		.connect(config.rethinkdb)
+		.then(connection => rethink
+			.table('decks')
+			.run(connection))
+		.then(result => result.toArray())
+		.then(result => this.body = result.map(deck => deck.name))
+		.then(() => next);
+}
+
+module.exports.getByHash = function *(next) {
+	yield rethink
+		.connect(config.rethinkdb)
+		.then(connection => TreeSerializer.deserializeDeck(
+			ObjectRepository(connection),
+			this.params.hash))
+		.then(result => this.body = result)
+		.then(() => next);
+}
+
 module.exports.getByName = function *(next) {
 	const deckName = `${this.params.user}/${this.params.name}`;
 
@@ -27,13 +48,32 @@ module.exports.getByName = function *(next) {
 		.then(() => next);
 }
 
-module.exports.getByHash = function *(next) {
+module.exports.getByUser = function *(next) {
+	if(!this.params.user) {
+		this.throw(400, 'No user provided in the URL');
+	}
+	
+	if(this.params.user.includes('/')) {
+		this.throw(400, 'Invalid user');
+	}
+	
+	const namePrefix = `${ this.params.user }/`;
+	
 	yield rethink
 		.connect(config.rethinkdb)
-		.then(connection => TreeSerializer.deserializeDeck(
-			ObjectRepository(connection),
-			this.params.hash))
-		.then(result => this.body = result)
+		.then(connection => rethink
+			.table('decks')
+			.filter(deck => deck('name').match('(?i)^' + namePrefix))
+			.run(connection))
+		.then(cursor => cursor.toArray())
+		.then(decks => {
+			this.body = {
+				'decks': decks.map(deck => ({
+					'name': deck.name.slice(deck.name.indexOf(namePrefix)),
+					'url': `/decks/${ deck.name }`
+				}))
+			};
+		})
 		.then(() => next);
 }
 
