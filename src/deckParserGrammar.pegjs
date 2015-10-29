@@ -7,11 +7,11 @@ board
     { return { type: t, cards: c }; }
 
 boardType
-  = t:("main" / "side")("board" / "deck")
+  = t:("main" / "side" / "maybe")("board" / "deck")
     { return t; }
 
 cardLine
-  = q:number whitespace n:cardName whitespace? (lineTerminator / eof) 
+  = q:number[Xx]? whitespace n:cardName whitespace? (lineTerminator / eof) 
     { return { quantity: q, name: n}; }
 
 number
